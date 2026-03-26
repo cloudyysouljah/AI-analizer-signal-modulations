@@ -39,7 +39,7 @@ class base_win(QtWidgets.QWidget):
 		self.setLayout(self.layout)
 
 	def draw_plot(self, data):
-		# print(data)
+		data = np.array(data)
 		I = data[:, 0]
 		Q = data[:, 1]
 		self.curve_I.setData(I[:1024].tolist())
@@ -57,65 +57,77 @@ class dataset_win(base_win):
 
 		self.dataset_path = dataset
 
+
+		self.index_label = QtWidgets.QLabel("Номер сигнала")
+		self.index_spin = QtWidgets.QSpinBox()
 		self.step_btn = QtWidgets.QPushButton("Предыдущий")
 		self.next_btn = QtWidgets.QPushButton("Следующий")
 		self.show_dataset_btn = QtWidgets.QPushButton("Показать")
 
-		# self.layout = QtWidgets.QHBoxLayout()
-
-		# self.radio_graph = pqtg.PlotWidget(title = "Сигнал")
-		# self.radio_graph.addLegend()
-		# self.spectre_graph = pqtg.PlotWidget(title = "Спектр")
 		self.dataset_thread = None
 		self.data_thread = None
 		self.dataset = None
 		self.dataset_download = False
-
-		# self.left_box = QtWidgets.QVBoxLayout()
-		# self.left_box.addWidget(self.radio_graph)
-
-		# self.center_box = QtWidgets.QVBoxLayout()
-		# self.center_box.addWidget(self.spectre_graph)
+		self.dataset_index = 0
 
 		self.right_box.addWidget(self.show_dataset_btn)
 		self.right_box.addWidget(self.step_btn)
 		self.right_box.addWidget(self.next_btn)
 
 		self.show_dataset_btn.clicked.connect(self.start_parse_dataset)
+		self.next_btn.clicked.connect(self.next_idx)
+		self.step_btn.clicked.connect(self.step_idx)
 		self.dataset_signal.connect(self.draw_plot)
-		# self.add_data_btn.clicked.connect(self.add_data)
-		# self.freq_spin.valueChanged.connect(self.change_freq)
 
 	def start_parse_dataset(self):
 		self.dataset_thread = threading.Thread(target = self.parse_dataset, daemon = True)
-		# self.dataset_thread.started.connect(self.parse_dataset)
 		self.dataset_download = True
 		self.dataset_thread.start()
-		# self.dataset_thread.run()
 
-	# def 
+	def next_idx(self):
+		self.dataset_index += 1
+		# подгружаем следующий батч когда дошли до конца текущего
+		if self.dataset_index >= len(self.dataset[0]):
+			chunk_start = self.global_index  # глобальный индекс в файле
+			with h5py.File(self.dataset_path, 'r') as f:
+				total = f['X'].shape[0]
+				if chunk_start >= total:
+					chunk_start = 0  # зацикливаем
+				X = f['X'][chunk_start:chunk_start + 1000]
+				Y = f['Y'][chunk_start:chunk_start + 1000]
+				Z = f['Z'][chunk_start:chunk_start + 1000]
+			self.dataset = (X, Y, Z)
+			self.dataset_index = 0
+			self.global_index = chunk_start + 1000
+
+		self.dataset_signal.emit(self.dataset[0][self.dataset_index])
+
+	def step_idx(self):
+		self.dataset_index -= 1
+		# подгружаем предыдущий батч когда вышли за начало
+		if self.dataset_index < 0:
+			chunk_end = self.global_index - len(self.dataset[0])  # где начался текущий батч
+			chunk_start = max(0, chunk_end - 1000)
+			with h5py.File(self.dataset_path, 'r') as f:
+				X = f['X'][chunk_start:chunk_end]
+				Y = f['Y'][chunk_start:chunk_end]
+				Z = f['Z'][chunk_start:chunk_end]
+			self.dataset = (X, Y, Z)
+			self.dataset_index = len(self.dataset[0]) - 1
+			self.global_index = chunk_start
+
+		self.dataset_signal.emit(self.dataset[0][self.dataset_index])
 
 	def parse_dataset(self):
-		while self.dataset_download:
-			with h5py.File(self.dataset_path, 'r') as f:
-				X = f['X'][:10]  # все сигналы — может быть тяжело, лучше срез
-				Y = f['Y'][:10]
-				Z = f['Z'][:10]
-				print(X.shape)
-			self.dataset = (X, Y, Z)
-			# print(self.dataset)
-			# print(data_for_graph)
-			# self.dataset_signal.emit(data_for_graph)
-			print(X.shape[0])
-			for i in range(X.shape[0]):
-				data_for_graph = X[i]
-			# 	print(data_for_graph)
-				# data_for_graph = np.linalg.norm(X[i], axis=1)
-				self.dataset_signal.emit(data_for_graph)
-				time.sleep(1)
-			self.dataset_download = False
-			# self.dataset_signal.emit(self.dataset)
-			# self.msleep(1000)
+		with h5py.File(self.dataset_path, 'r') as f:
+			X = f['X'][:1000]
+			Y = f['Y'][:1000]
+			Z = f['Z'][:1000]
+		self.dataset = (X, Y, Z)
+		self.dataset_index = 0
+		self.global_index = 1000  # следующий старт
+		self.dataset_signal.emit(self.dataset[0][0])
+		self.dataset_download = False
 
 class data_thread(QtCore.QThread):
 	data_signal = QtCore.pyqtSignal(list)
