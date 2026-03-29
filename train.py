@@ -7,6 +7,6 @@ class ResBlock1D():
 		
 
 
-class Train(torch.utils.data.Dataset):
+class Train():
 	def __init__(self):		
 		super(Train, self).__init__()
