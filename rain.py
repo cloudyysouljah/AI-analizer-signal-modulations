@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import h5py
 import time
+import train_win
 
 # ── GPU флаги ────────────────────────────────────────────────────────────────
 torch.backends.cudnn.benchmark        = True
@@ -453,7 +454,7 @@ def plot_confusion(
 
 def main(args: argparse.Namespace) -> None:
     # В main(), перед циклом обучения
-    os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
+    # os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
     # ── Устройство ───────────────────────────────────────────────────────────
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -557,12 +558,13 @@ def main(args: argparse.Namespace) -> None:
                 args.save,
             )
             saved = "  💾 сохранено"
-
+        train_window = train_win.TrainWindow()
+        train_window.progress_update.emit(epoch)
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
             f"Loss {tr_loss:.4f}/{vl_loss:.4f} | "
             f"Acc {tr_acc:.4f}/{vl_acc:.4f} | "
-            f"Train time {train_time} sec"
+            f"Train time {train_time:.2f} sec"
             f"{vram_str}{saved}"
         )
 

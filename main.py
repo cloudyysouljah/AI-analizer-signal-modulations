@@ -49,7 +49,7 @@ class BaseWindow(QtWidgets.QWidget):
 		self.left_box.addWidget(self.spectre_graph)
 		self.left_box.addWidget(self.iq_plot)
 
-		self.info_label = QtWidgets.QLabel("Индекс сигнала: - \nКласс: - \nSNR: -")
+		self.info_label = QtWidgets.QLabel("Индекс сигнала: - \nКласс: - \nSNR (Отношение сигнал/шум в дБ): -")
 
 		self.right_box = QtWidgets.QVBoxLayout()
 
@@ -63,7 +63,7 @@ class BaseWindow(QtWidgets.QWidget):
 		self.setLayout(self.layout)
 
 	def clear_info(self):
-		self.info_label.setText("Индекс сигнала: - \nКласс: - \nSNR: -")
+		self.info_label.setText("Индекс сигнала: - \nКласс: - \nSNR (Отношение сигнал/шум в дБ): -")
 
 	def clear_plot(self):
 		self.radio_graph.clear()
@@ -164,7 +164,7 @@ class DatasetWindow(BaseWindow):
 		self.index_spin.valueChanged.connect(self.index_spin_changed)
 
 	def start_train(self):
-		train_window = train_win.TrainWindow(parent = self, title = "Обучение", samples = self.get_dataset_size(self.dataset_path))
+		train_window = train_win.TrainWindow(parent = self, title = "Обучение", samples = self.get_dataset_size(self.dataset_path), path = self.dataset_path)
 		train_window.show()
 
 	def start_parse_dataset(self):
@@ -251,23 +251,8 @@ class DataThread(QtCore.QThread):
 		self.phase = 0.0
 		self.running = True
 		self.ai = False
-		model = rain.RadioMLNet(24)
-		checkpoint = torch.load('models/best_model_ideal.pt', map_location='cpu')
-		model.load_state_dict(checkpoint['model_state'])
-		model.eval()
 
-		with torch.no_grad():
-			torch.onnx.export(
-				model,
-				torch.randn(1, 2, 1024),
-				"models/best_model_ideal.onnx",
-				input_names=['input'],
-				output_names=['output'],
-				dynamic_axes=None,
-				opset_version=17
-			)
-
-		self.sess = ort.InferenceSession('models/best_model_ideal.onnx', providers=['CPUExecutionProvider'])
+		self.sess = ort.InferenceSession('models/best_model_ideal.onnx', providers=['CUDAExecutionProvider'])
 		self.ai_signal.connect(self.ai_state)
 
 	def run(self):
@@ -479,6 +464,10 @@ class MainWindow(BaseWindow):
 			self.data_status_label.update()
 			self.data_thread.running = False
 			self.data_status = False
+
+	def closeEvent(self, event):
+		if self.data_thread is not None:
+			self.data_thread.running = False
 
 if __name__ == "__main__":
 	app = QtWidgets.QApplication(sys.argv)

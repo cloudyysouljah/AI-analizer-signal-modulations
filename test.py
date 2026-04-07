@@ -183,7 +183,7 @@ class DatasetBrowser(QtWidgets.QWidget):
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
-    path = 'c:/Users/leoni/Desktop/diplom/dataset/GOLD_XYZ_OSC.0001_1024.hdf5'  # укажи свой путь
+    path = '/home/leonid/Загрузки/archive (2)/GOLD_XYZ_OSC.0001_1024.hdf5'  # укажи свой путь
     win = DatasetBrowser(path)
     win.show()
     sys.exit(app.exec())

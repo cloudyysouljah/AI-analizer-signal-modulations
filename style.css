@@ -1,3 +1,8 @@
+#log {
+	background-color: black;
+	border-radius: 8px;
+	color: white;
+}
 #data-receive-btn {
     width: 30px;
     height: 30px;
@@ -9,4 +14,7 @@
     height: 30px;
     background-color: rgb(30, 255, 0);
     border-radius: 15px;
+}
+* {
+    font-family: "Cantarell", "DejaVu Sans", sans-serif;
 }
