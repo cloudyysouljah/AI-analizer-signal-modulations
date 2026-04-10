@@ -32,6 +32,7 @@ import seaborn as sns
 import h5py
 import time
 import train_win
+from PyQt6 import QtCore, QtWidgets
 
 # ── GPU флаги ────────────────────────────────────────────────────────────────
 torch.backends.cudnn.benchmark        = True
@@ -452,7 +453,7 @@ def plot_confusion(
 # 7. MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace, parent = None) -> None:
     # В main(), перед циклом обучения
     # os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
     # ── Устройство ───────────────────────────────────────────────────────────
@@ -558,8 +559,7 @@ def main(args: argparse.Namespace) -> None:
                 args.save,
             )
             saved = "  💾 сохранено"
-        train_window = train_win.TrainWindow()
-        train_window.progress_update.emit(epoch)
+        parent.progress_update.emit(epoch)
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
             f"Loss {tr_loss:.4f}/{vl_loss:.4f} | "

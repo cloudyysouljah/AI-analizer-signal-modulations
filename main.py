@@ -244,15 +244,25 @@ class DataThread(QtCore.QThread):
 	ai_signal = QtCore.pyqtSignal(bool)
 	probs_signal = QtCore.pyqtSignal(np.ndarray, int)
 
-	def __init__(self):
+	def __init__(self, path):
 		super().__init__()
 		self.data = None
 		self.freq = 1000
 		self.phase = 0.0
 		self.running = True
 		self.ai = False
+		self.model_path = path
 
-		self.sess = ort.InferenceSession('models/best_model_ideal.onnx', providers=['CUDAExecutionProvider'])
+		# model = rain.RadioMLNet(24)
+		# # model.load_state_dict(torch.load('best_model_test.pt'))
+		# # model.eval()
+
+		# example_input = torch.randn(1, 2, 1024, dtype=torch.float32)
+		# onnx_program = torch.onnx.export(model, example_input, dynamo=True)
+
+		# onnx_program.save("models/best_model_test.onnx")
+
+		self.sess = ort.InferenceSession(self.model_path, providers=['CUDAExecutionProvider'])
 		self.ai_signal.connect(self.ai_state)
 
 	def run(self):
@@ -288,7 +298,7 @@ class DataThread(QtCore.QThread):
 
 		# Случайный SNR
 		if snr_db is None:
-			snr_db = np.random.choice(np.arange(-6, 30, 2))  # как в RadioML
+			snr_db = np.random.choice(np.arange(-20, 30, 2))  # как в RadioML
 		snr_linear = 10 ** (snr_db / 10)
 		noise_std = 1 / np.sqrt(2 * snr_linear)
 		noise = (np.random.randn(n_samples) + 1j * np.random.randn(n_samples)) * noise_std
@@ -325,6 +335,7 @@ class MainWindow(BaseWindow):
 		self.data_thread = None
 
 		self.data_status = False
+		self.model_path = None
 
 		self.freq_box = QtWidgets.QHBoxLayout()
 		self.freq_label = QtWidgets.QLabel("Частота обновления (мс)")
@@ -418,6 +429,17 @@ class MainWindow(BaseWindow):
 		)
 		self.dataset_win.setWindowFlag(QtCore.Qt.WindowType.Window)
 		self.dataset_win.show()
+
+	def choice_model(self):
+		model_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+			self,
+			caption="Выберите модель в формате onnx",
+			directory=os.path.expanduser("~"),
+			filter="*.onnx",
+		)
+		if not model_path:
+			return
+		self.model_path = model_path
 
 	def change_freq(self):
 		if self.data_thread is not None:
