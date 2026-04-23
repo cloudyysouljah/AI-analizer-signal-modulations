@@ -546,8 +546,12 @@ def main(args: argparse.Namespace, parent = None) -> None:
             vram_str = f"  VRAM: {torch.cuda.memory_reserved(0) / 1024 ** 3:.1f} GB"
 
         saved = ""
+        patience = 15
+        best_val = 0
+        no_improve = 0
         if vl_acc > best_val_acc:
             best_val_acc = vl_acc
+            no_improve = 0
             torch.save(
                 {
                     "epoch":       epoch,
@@ -559,6 +563,8 @@ def main(args: argparse.Namespace, parent = None) -> None:
                 args.save,
             )
             saved = "  💾 сохранено"
+        else:
+            no_improve+=1
         parent.progress_update.emit(epoch)
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
@@ -567,6 +573,9 @@ def main(args: argparse.Namespace, parent = None) -> None:
             f"Train time {train_time:.2f} sec"
             f"{vram_str}{saved}"
         )
+        if no_improve >= patience:
+            print(f"🛑 Слишком мало улучшений за последние {patience} эпох")
+            break
 
     # ── Финальная оценка на тесте ─────────────────────────────────────────────
     print("\n🔄 Загружаю лучшую модель для финальной оценки...")

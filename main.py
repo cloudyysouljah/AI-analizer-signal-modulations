@@ -5,7 +5,7 @@ import threading
 import h5py
 import onnxruntime as ort
 import numpy as np
-import rain, train_win
+import train_win
 import torch
 import time
 import pyqtgraph as pqtg
@@ -261,8 +261,10 @@ class DataThread(QtCore.QThread):
 		# onnx_program = torch.onnx.export(model, example_input, dynamo=True)
 
 		# onnx_program.save("models/best_model_test.onnx")
-
-		self.sess = ort.InferenceSession(self.model_path, providers=['CUDAExecutionProvider'])
+		try:
+			self.sess = ort.InferenceSession(self.model_path, providers=['CUDAExecutionProvider'])
+		except:
+			print("AI error")
 		self.ai_signal.connect(self.ai_state)
 
 	def run(self):

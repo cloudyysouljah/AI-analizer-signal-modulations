@@ -1,19 +1,16 @@
 from PyQt6 import QtCore, QtWidgets, QtGui
-import rain
+import train
 import threading
 import sys
 from types import SimpleNamespace
 
 class StreamRedirect:
-    def __init__(self, callback):
-        self.callback = callback
-    
-    def write(self, text):
-        if text.strip():
-            self.callback(text)
-    
-    def flush(self):
-        pass
+	def __init__(self, callback):
+		self.callback = callback
+	
+	def write(self, text):
+		if text.strip():
+			self.callback(text)
 
 class Toggle(QtWidgets.QPushButton):
 	def __init__(self, text):
@@ -64,7 +61,6 @@ class TrainWindow(QtWidgets.QDialog):
 		self.learn_label = QtWidgets.QLabel("Learning rate")
 		self.learn_line = QtWidgets.QLineEdit()
 		self.learn_line.setPlaceholderText("Введите learning rate")
-		# self.learn_line.setValidator(QtGui.QIntValidator())
 
 		self.terminal = QtWidgets.QTextEdit()
 		self.terminal.setReadOnly(True)
@@ -87,6 +83,7 @@ class TrainWindow(QtWidgets.QDialog):
 		self.model_grid.addWidget(self.learn_label, 3, 0)
 		self.model_grid.addWidget(self.learn_line, 3, 1)
 
+		self.layout.addWidget(self.samples_label)
 		self.layout.addLayout(self.model_grid)
 		self.layout.addWidget(self.train_btn)
 		self.layout.addWidget(self.state_train)
@@ -108,13 +105,11 @@ class TrainWindow(QtWidgets.QDialog):
 			self._stop_event.clear()
 			self.train_thread = threading.Thread(
 				target=self.train,
-				args = (self._stop_event,),
 				daemon=True,
 			)
 			self.train_thread.start()
 			self.train_btn.setText("Прервать обучение")
 		else:
-			self._stop_event.set()  # сигнал потоку остановиться
 			self.train_btn.setText("Начать обучение")
 
 	def train(self):
@@ -124,8 +119,10 @@ class TrainWindow(QtWidgets.QDialog):
 			epochs = self.epochs_line.text()
 			batch = self.batch_line.text()
 			self.progress_signal.emit(int(epochs))
-			args = SimpleNamespace(data = self.path, max_samples = int(max_samples), epochs = int(epochs), batch_size = int(batch), 
-								snr_min = 0, dropout = 0.5, lr = 5e-4, save = "best_model_test.pt")
-			rain.main(args, parent = self)
+			model_train = train.Train(parent = self, path = self.path, 
+									save_path = "best_model_test.pt", batch_size = int(batch), 
+									lr = 2e-3, epochs = int(epochs), 
+									patience = 15, snr_min = -20, max_samples = int(max_samples))
+			model_train.run()
 		finally:
 			sys.stdout = sys.__stdout__
