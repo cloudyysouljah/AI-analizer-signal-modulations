@@ -1,29 +1,7 @@
 from PyQt6 import QtCore, QtWidgets, QtGui
+from PyQt6.QtGui import QFontMetrics
 import train
 import threading
-import sys
-from types import SimpleNamespace
-
-class StreamRedirect:
-	def __init__(self, callback):
-		self.callback = callback
-	
-	def write(self, text):
-		if text.strip():
-			self.callback(text)
-
-class Toggle(QtWidgets.QPushButton):
-	def __init__(self, text):
-		super().__init__(text)
-		self.setCheckable(True)
-
-		self.clicked.connect(self.toggle)
-
-	def toggle(self):
-		if self.isChecked():
-			self.setText("Прервать обучение")
-		else:
-			self.setText("Начать обучение")
 
 class TrainWindow(QtWidgets.QDialog):
 	log_signal = QtCore.pyqtSignal(str)
@@ -62,13 +40,22 @@ class TrainWindow(QtWidgets.QDialog):
 		self.learn_line = QtWidgets.QLineEdit()
 		self.learn_line.setPlaceholderText("Введите learning rate")
 
+		self.snr_label = QtWidgets.QLabel("Минимальное отношение сигнал/шум дБ")
+		self.snr_line = QtWidgets.QLineEdit()
+		self.snr_line.setPlaceholderText("Введите минимальное отношение сигнал/шум дБ")
+
+		self.patience_label = QtWidgets.QLabel("Кол-во эпох без улучшения")
+		self.patience_line = QtWidgets.QLineEdit()
+		self.patience_line.setPlaceholderText("Введите кол-во эпох без улучшения")
+		self.patience_line.setValidator(QtGui.QIntValidator())
+
 		self.terminal = QtWidgets.QTextEdit()
 		self.terminal.setReadOnly(True)
 		self.terminal.setObjectName("log")
 
-		self.train_btn = Toggle("Начать обучение")
+		self.train_btn = QtWidgets.QPushButton("Начать обучение")
 
-		self._stop_event = threading.Event()
+		self.train_state = False
 		self.train_thread = None
 
 		self.state_train = QtWidgets.QProgressBar()
@@ -82,12 +69,18 @@ class TrainWindow(QtWidgets.QDialog):
 		self.model_grid.addWidget(self.batch_line, 2, 1)
 		self.model_grid.addWidget(self.learn_label, 3, 0)
 		self.model_grid.addWidget(self.learn_line, 3, 1)
+		self.model_grid.addWidget(self.snr_label, 4, 0)
+		self.model_grid.addWidget(self.snr_line, 4, 1)
+		self.model_grid.addWidget(self.patience_label, 5, 0)
+		self.model_grid.addWidget(self.patience_line, 5, 1)
 
 		self.layout.addWidget(self.samples_label)
 		self.layout.addLayout(self.model_grid)
 		self.layout.addWidget(self.train_btn)
 		self.layout.addWidget(self.state_train)
 		self.layout.addWidget(self.terminal)
+
+		self.resize_to_placeholders()
 
 		self.setLayout(self.layout)
 
@@ -97,12 +90,34 @@ class TrainWindow(QtWidgets.QDialog):
 		self.progress_signal.connect(self.state_train.setMaximum)
 		self.progress_update.connect(self.state_train.setValue)
 
+	def resize_to_placeholders(self):
+		fm = QFontMetrics(self.font())
+
+		max_width = 0
+
+		for line in [
+			self.max_samples_line,
+			self.epochs_line,
+			self.batch_line,
+			self.learn_line,
+			self.snr_line,
+			self.patience_line,
+		]:
+			text = line.placeholderText()
+			w = fm.horizontalAdvance(text)
+			max_width = max(max_width, w)
+
+		total_width = max_width + 300
+
+		self.setMinimumWidth(total_width)
+		self.resize(total_width, self.height())
+
 	def log(self, text):
 		self.terminal.append(text)
 
 	def train_thr(self):
-		if self.train_btn.isChecked():
-			self._stop_event.clear()
+		self.train_state = not self.train_state
+		if self.train_state:
 			self.train_thread = threading.Thread(
 				target=self.train,
 				daemon=True,
@@ -113,16 +128,18 @@ class TrainWindow(QtWidgets.QDialog):
 			self.train_btn.setText("Начать обучение")
 
 	def train(self):
-		sys.stdout = StreamRedirect(self.log_signal.emit)
 		try:
-			max_samples = self.max_samples_line.text() if self.max_samples_line.text() != "" else self.samples
-			epochs = self.epochs_line.text()
-			batch = self.batch_line.text()
+			max_samples = int(self.max_samples_line.text()) if self.max_samples_line.text() != "" else self.samples
+			epochs = int(self.epochs_line.text())
+			batch = int(self.batch_line.text())
+			lr_rate = float(self.learn_line.text())
+			snr_min = float(self.snr_line.text())
+			patience = int(self.patience_line.text())
 			self.progress_signal.emit(int(epochs))
-			model_train = train.Train(parent = self, path = self.path, 
-									save_path = "best_model_test.pt", batch_size = int(batch), 
-									lr = 2e-3, epochs = int(epochs), 
-									patience = 15, snr_min = -20, max_samples = int(max_samples))
+			model_train = train.Train(parent = self, path = self.path,
+									save_path = "best_model_test.pt", batch_size = batch,
+									lr = lr_rate, epochs = epochs,
+									patience = patience, snr_min = snr_min, max_samples = max_samples)
 			model_train.run()
-		finally:
-			sys.stdout = sys.__stdout__
+		except Exception as e:
+			self.log_signal.emit(str(e))

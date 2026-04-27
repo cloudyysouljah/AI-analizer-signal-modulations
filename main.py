@@ -134,26 +134,11 @@ class DatasetWindow(BaseWindow):
 		self.next_btn = QtWidgets.QPushButton("Следующий")
 		self.show_dataset_btn = QtWidgets.QPushButton("Показать")
 
-		self.right_box.addWidget(
-			self.index_spin,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop
-			)
-		self.right_box.addWidget(
-			self.train_btn,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop
-			)
-		self.right_box.addWidget(
-			self.show_dataset_btn,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop
-			)
-		self.right_box.addWidget(
-			self.prev_btn,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop
-			)
-		self.right_box.addWidget(
-			self.next_btn,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop
-			)
+		self.right_box.addWidget(self.index_spin)
+		self.right_box.addWidget(self.train_btn)
+		self.right_box.addWidget(self.show_dataset_btn)
+		self.right_box.addWidget(self.prev_btn)
+		self.right_box.addWidget(self.next_btn)
 
 		self.train_btn.clicked.connect(self.start_train)
 		self.show_dataset_btn.clicked.connect(self.start_parse_dataset)
@@ -164,7 +149,10 @@ class DatasetWindow(BaseWindow):
 		self.index_spin.valueChanged.connect(self.index_spin_changed)
 
 	def start_train(self):
-		train_window = train_win.TrainWindow(parent = self, title = "Обучение", samples = self.get_dataset_size(self.dataset_path), path = self.dataset_path)
+		train_window = train_win.TrainWindow(parent = self, 
+											title = "Обучение", 
+											samples = self.get_dataset_size(self.dataset_path), 
+											path = self.dataset_path)
 		train_window.show()
 
 	def start_parse_dataset(self):
@@ -244,39 +232,26 @@ class DataThread(QtCore.QThread):
 	ai_signal = QtCore.pyqtSignal(bool)
 	probs_signal = QtCore.pyqtSignal(np.ndarray, int)
 
-	def __init__(self, path):
+	def __init__(self):
 		super().__init__()
 		self.data = None
 		self.freq = 1000
 		self.phase = 0.0
 		self.running = True
 		self.ai = False
-		self.model_path = path
+		self.model_path = self.get_model_path()
 
-		# model = rain.RadioMLNet(24)
-		# # model.load_state_dict(torch.load('best_model_test.pt'))
-		# # model.eval()
-
-		# example_input = torch.randn(1, 2, 1024, dtype=torch.float32)
-		# onnx_program = torch.onnx.export(model, example_input, dynamo=True)
-
-		# onnx_program.save("models/best_model_test.onnx")
 		try:
-			self.sess = ort.InferenceSession(self.model_path, providers=['CUDAExecutionProvider'])
-		except:
-			print("AI error")
+			self.sess = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
+		except Exception as e:
+			self.sess = None
+			print("AI error" , e)
 		self.ai_signal.connect(self.ai_state)
 
 	def run(self):
-		# t = np.linspace(0, 2 * np.pi, 1024)
 		while self.running:
-			# i = np.sin(t + self.phase) + np.random.randn(1024) * 0.3
-			# q = np.sin(t + self.phase)
-			# iq = np.stack([i, q], axis=0)
 			iq = self.generate_bpsk()
-			# snr = self.estimate_snr(iq)
 			self.data = iq.T.tolist()
-			# self.data = np.column_stack([i, q]).tolist()  # shape (100, 2)
 			if self.ai:
 				pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
 				self.info_signal.emit(classes[pred_idx], confidence, speed_ai, False)
@@ -284,6 +259,15 @@ class DataThread(QtCore.QThread):
 			self.phase += 0.2
 			self.data_signal.emit(self.data)
 			self.msleep(int(self.freq))
+
+	def get_model_path(self):
+		model_path, _= QtWidgets.QFileDialog.getOpenFileName(
+			self.parent(),
+			caption="Выберите файл модели в формате onnx",
+			directory=os.path.expanduser("~"),
+			filter="*.onnx",
+		)
+		return model_path
 
 	def generate_bpsk(self, n_samples=1024, sps=8, snr_db=None):
 		n_symbols = n_samples // sps
@@ -311,15 +295,14 @@ class DataThread(QtCore.QThread):
 		return np.stack([signal.real, signal.imag], axis=0)
 
 	def ai_proc(self, data):
+		if self.sess is None:
+			return
 		start = time.time()
-
 		output = self.sess.run(None, {'input': torch.tensor(data, dtype=torch.float32).unsqueeze(0).numpy()})
-
 		logits = output[0][0]  # сырые логиты
 		#Применяем softmax вручную
 		e = np.exp(logits - logits.max())  # вычитаем max для численной стабильности
 		probs = e / e.sum()
-		
 		pred_idx = probs.argmax()
 		confidence = probs[pred_idx]  # теперь от 0.0 до 1.0
 		speed_ai = (time.time() - start) * 1000
@@ -338,14 +321,6 @@ class MainWindow(BaseWindow):
 
 		self.data_status = False
 		self.model_path = None
-
-		self.freq_box = QtWidgets.QHBoxLayout()
-		self.freq_label = QtWidgets.QLabel("Частота обновления (мс)")
-		self.freq_spin = QtWidgets.QSpinBox()
-		self.freq_spin.setRange(50, 1000)
-		self.freq_spin.setValue(1000)
-		self.freq_box.addWidget(self.freq_label)
-		self.freq_box.addWidget(self.freq_spin)
 
 		self.conf_graph = pqtg.PlotWidget(title="Классификация")
 		self.conf_graph.setLabel(axis='left', text='Классы')
@@ -372,37 +347,20 @@ class MainWindow(BaseWindow):
 		self.data_status_label = QtWidgets.QLabel()
 		self.data_status_label.setFixedSize(30, 30)
 		self.data_status_label.setObjectName("data-receive-btn")
-		self.data_box.addWidget(self.data_receive_btn)
-		self.data_box.addWidget(self.data_status_label)
-
-		self.dataset_btn = QtWidgets.QPushButton("Загрузить датасет")
-		
 		self.ai_chk = QtWidgets.QCheckBox("AI")
 		self.ai_chk.setEnabled(False)
+		self.data_box.addWidget(self.data_receive_btn, 1)
+		self.data_box.addWidget(self.data_status_label)
+		self.data_box.addWidget(self.ai_chk)
 
-		self.right_box.addLayout(self.freq_box)
+		self.dataset_btn = QtWidgets.QPushButton("Загрузить датасет")
 
-		self.right_box.addWidget(
-			self.conf_graph,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop,
-		)
-		self.right_box.addLayout(
-			self.data_box,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop,
-		)
+		self.right_box.addWidget(self.conf_graph)
+		self.right_box.addLayout(self.data_box)
 
-		self.right_box.addWidget(
-			self.dataset_btn,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop,
-		)
-
-		self.right_box.addWidget(
-			self.ai_chk,
-			# alignment=QtCore.Qt.AlignmentFlag.AlignTop,
-		)
+		self.right_box.addWidget(self.dataset_btn)
 
 		self.data_receive_btn.clicked.connect(self.data_receive)
-		self.freq_spin.valueChanged.connect(self.change_freq)
 		self.dataset_btn.clicked.connect(self.open_dataset_window)
 
 	def update_conf(self, conf: np.ndarray, pred_idx: int):
@@ -442,10 +400,6 @@ class MainWindow(BaseWindow):
 		if not model_path:
 			return
 		self.model_path = model_path
-
-	def change_freq(self):
-		if self.data_thread is not None:
-			self.data_thread.freq = self.freq_spin.value()
 
 	def clear_conf_plot(self):
 		self.conf_graph.clear()

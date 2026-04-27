@@ -12,7 +12,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QThread, pyqtSignal
 
 SAMPLE_LEN = 1024
 
@@ -109,7 +109,6 @@ class RadioMLNet(nn.Module):
 		x, _ = self.lstm(x.permute(0, 2, 1))
 		return self.head(x[:, -1, :])
 
-
 class Train(QThread):
 	def __init__(
 		self,
@@ -144,7 +143,7 @@ class Train(QThread):
 		with h5py.File(self.path, "r") as f:
 			total = f["X"].shape[0]
 			n     = min(self.max_samples, total) if self.max_samples else total  # ✅
-			print(f"📦 Загружаю {n:,} / {total:,} сэмплов")
+			self.parent.log_signal.emit(f"📦 Загружаю {n:,} / {total:,} сэмплов")
 			x_data = f["X"][:n].astype(np.float16)
 			y_data = f["Y"][:n].astype(np.float32)
 			y_data = np.argmax(y_data, axis=1).astype(np.int64)
@@ -152,17 +151,17 @@ class Train(QThread):
 		train_dataset, test_dataset, valid_dataset = self.make_tensor_datasets(x_data, y_data)
 		del x_data, y_data
 		gc.collect()
-		print("🧹 Исходный numpy массив освобождён")
+		self.parent.log_signal.emit("🧹 Исходный numpy массив освобождён")
 
 		params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-		print(f"🧠 Параметров: {params:,}  |  Классов: {len(CLASSES)}: {CLASSES}")
+		self.parent.log_signal.emit(f"🧠 Параметров: {params:,}  |  Классов: {len(CLASSES)}: {CLASSES}")
 
 		if os.name == "nt":
 			nw, pw, pf = 0, False, None
-			print("💡 Windows: num_workers=0")
+			self.parent.log_signal.emit("💡 Windows: num_workers=0")
 		else:
 			nw, pw, pf = 4, True, 2
-			print(f"💡 Linux: num_workers={nw}, persistent_workers=True")
+			self.parent.log_signal.emit(f"💡 Linux: num_workers={nw}, persistent_workers=True")
 
 		pm = self.device.type == "cuda"
 		loader_kwargs = dict(
@@ -225,7 +224,7 @@ class Train(QThread):
 				no_improve += 1  # ✅ инкрементируется корректно
 
 			self.parent.progress_update.emit(epoch)
-			print(
+			self.parent.log_signal.emit(
 				f"Epoch {epoch:3d}/{self.epochs} | "
 				f"Loss {tr_loss:.4f}/{vl_loss:.4f} | "
 				f"Acc {tr_acc:.4f}/{vl_acc:.4f} | "
@@ -234,21 +233,39 @@ class Train(QThread):
 			)
 
 			if no_improve >= self.patience:  # ✅ используем self.patience
-				print(f"🛑 Слишком мало улучшений за последние {self.patience} эпох")
+				self.parent.log_signal.emit(f"🛑 Слишком мало улучшений за последние {self.patience} эпох")
 				break
 
-		print("\n🔄 Загружаю лучшую модель для финальной оценки...")
+		self.parent.log_signal.emit("\n🔄 Загружаю лучшую модель для финальной оценки...")
 		ckpt = torch.load(self.save_path, map_location=self.device)
 		self.model.load_state_dict(ckpt["model_state"])
 
 		test_loss, test_acc = self.eval_epoch(self.model, test_loader, criterion, self.device)
-		print(f"🏁 Test Accuracy: {test_acc:.4f}  |  Test Loss: {test_loss:.4f}")
-		print(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
+		self.parent.log_signal.emit(f"🏁 Test Accuracy: {test_acc:.4f}  |  Test Loss: {test_loss:.4f}")
+		self.parent.log_signal.emit(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
+
+		self.model.eval()
+		self.model.to("cpu")
 
 		example_input = torch.randn(1, 2, 1024, dtype=torch.float32)
-		onnx_program = torch.onnx.export(self.model, example_input, dynamo=True)
 
-		onnx_program.save(self.save_path.replace(".pt", ".onnx"))
+		onnx_path = self.save_path.replace(".pt", ".onnx")
+
+		torch.onnx.export(
+			self.model,
+			example_input,
+			onnx_path,
+			export_params=True,
+			opset_version=17,
+			input_names=["input"],
+			output_names=["output"],
+			dynamic_axes={
+				"input": {0: "batch"},
+				"output": {0: "batch"},
+			},
+		)
+		self.parent.log_signal.emit("✅ Успешно сохранил модель в ONNX")
+		self.parent.progress_update.emit(self.epochs)
 
 	def train_epoch(
 		self,
@@ -314,7 +331,7 @@ class Train(QThread):
 		x: np.ndarray,
 		y: np.ndarray,
 	) -> tuple[TensorDataset, TensorDataset, TensorDataset]:
-		print("\n✂️  Разбиваю на train/val/test (70/10/20)...")
+		self.parent.log_signal.emit("\n✂️  Разбиваю на train/val/test (70/10/20)...")
 		idx = np.arange(len(y))
 
 		idx_tr, idx_te, y_tr, _ = train_test_split(
@@ -331,5 +348,5 @@ class Train(QThread):
 		ds_tr = to_dataset(idx_tr, idx_tr)
 		ds_vl = to_dataset(idx_vl, idx_vl)
 		ds_te = to_dataset(idx_te, idx_te)
-		print(f" Train: {len(ds_tr):,}  Val: {len(ds_vl):,}  Test: {len(ds_te):,}")
+		self.parent.log_signal.emit(f" Train: {len(ds_tr):,}  Val: {len(ds_vl):,}  Test: {len(ds_te):,}")
 		return ds_tr, ds_vl, ds_te
