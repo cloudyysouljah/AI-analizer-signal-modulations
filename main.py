@@ -1,6 +1,9 @@
 import os
 import sys
 import threading
+import csv
+
+from datetime import datetime
 
 import h5py
 import onnxruntime as ort
@@ -164,19 +167,6 @@ class DatasetWindow(BaseWindow):
 		self.dataset_thread.start()
 		self.index_spin.setEnabled(True)
 
-	# def update_dataset(self, index):
-	# 	if index not in self.range_arr:
-	# 		with h5py.File(self.dataset_path, "r") as f:
-	# 			x_data = f["X"][index - 2500:index + 2500]
-	# 			y_data = f["Y"][index - 2500:index + 2500]
-	# 			z_data = f["Z"][index - 2500:index + 2500]
-	# 		self.dataset = [x_data, y_data, z_data]
-	# 		self.range_arr = np.arange(index - 2500, index + 2500)
-	# 		local = self.index_spin.value() - self.range_arr.min()
-	# 		for i in range(len(y_data[local])):
-	# 			if y_data[local][i] == 1:
-	# 				self.class_index = i
-
 	def update_dataset(self, index):
 		if index in self.range_arr:
 			return
@@ -231,15 +221,16 @@ class DataThread(QtCore.QThread):
 	info_signal = QtCore.pyqtSignal(str, float, float, bool)
 	ai_signal = QtCore.pyqtSignal(bool)
 	probs_signal = QtCore.pyqtSignal(np.ndarray, int)
+	power_signal = QtCore.pyqtSignal(float)
 
-	def __init__(self):
+	def __init__(self, model_path):
 		super().__init__()
 		self.data = None
 		self.freq = 1000
 		self.phase = 0.0
 		self.running = True
 		self.ai = False
-		self.model_path = self.get_model_path()
+		self.model_path = model_path
 
 		try:
 			self.sess = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
@@ -249,25 +240,27 @@ class DataThread(QtCore.QThread):
 		self.ai_signal.connect(self.ai_state)
 
 	def run(self):
+		csv_file = self.csv_headers_write(["Индекс сигнала", "Класс", "Вероятность", "Время обработки"])
+		self.index = 0
 		while self.running:
 			iq = self.generate_bpsk()
 			self.data = iq.T.tolist()
+			detected, power_db = self.energy_detector(iq, 10)
 			if self.ai:
-				pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
-				self.info_signal.emit(classes[pred_idx], confidence, speed_ai, False)
-				self.probs_signal.emit(probs, pred_idx)
+				if detected:
+					pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
+					self.info_signal.emit(classes[pred_idx], confidence, speed_ai, False)
+					self.probs_signal.emit(probs, pred_idx)
+					self.csv_data_write(csv_file, self.index, classes[pred_idx], confidence, speed_ai)
+					self.index += 1
+				else: 
+					self.info_signal.emit("", 0.0, 0.0, False)
+					self.csv_data_write(csv_file, self.index, "", 0.0, 0.0)
+					self.index += 1
 			self.phase += 0.2
+			self.power_signal.emit(power_db)
 			self.data_signal.emit(self.data)
 			self.msleep(int(self.freq))
-
-	def get_model_path(self):
-		model_path, _= QtWidgets.QFileDialog.getOpenFileName(
-			self.parent(),
-			caption="Выберите файл модели в формате onnx",
-			directory=os.path.expanduser("~"),
-			filter="*.onnx",
-		)
-		return model_path
 
 	def generate_bpsk(self, n_samples=1024, sps=8, snr_db=None):
 		n_symbols = n_samples // sps
@@ -310,6 +303,29 @@ class DataThread(QtCore.QThread):
 
 	def ai_state(self, state):
 		self.ai = state
+ 
+	def csv_headers_write(self, headers):
+		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+		csv_string = "result_" + str(timestamp) +".csv"
+		with open(csv_string, "w", newline="") as f:
+			writer = csv.writer(f, delimiter=";")
+			writer.writerow([headers])
+
+		return csv_string
+
+	def csv_data_write(self, name_file, index, class_index, confidence, speed_ai):
+		confidence = f"{confidence:.2f}"
+		speed_ai = f"{speed_ai:.2f}"
+		with open(name_file, "a", newline="") as f:
+			writer = csv.writer(f, delimiter=";")
+			writer.writerow([index, class_index, confidence, speed_ai])
+
+	def energy_detector(self, iq, threshold):
+		power = np.mean(iq[0] ** 2 + iq[1] ** 2)
+		power_db = 10 * np.log10(power + 1e-12)
+
+		detected = power_db >= threshold
+		return detected, power_db
 
 class MainWindow(BaseWindow):
 	def __init__(self, title=None):
@@ -342,6 +358,12 @@ class MainWindow(BaseWindow):
 		)
 		self.conf_graph.addItem(self.bar_item)
 
+		self.signal_info_box = QtWidgets.QVBoxLayout()
+		self.power_label = QtWidgets.QLabel("Мощность сигнала в дб: -")
+		self.signal_label = QtWidgets.QLabel("◉ Нет сигнала")
+		self.signal_info_box.addWidget(self.signal_label)
+		self.signal_info_box.addWidget(self.power_label)
+
 		self.data_box = QtWidgets.QHBoxLayout()
 		self.data_receive_btn = QtWidgets.QPushButton("Начать приём сигнала")
 		self.data_status_label = QtWidgets.QLabel()
@@ -355,6 +377,7 @@ class MainWindow(BaseWindow):
 
 		self.dataset_btn = QtWidgets.QPushButton("Загрузить датасет")
 
+		self.right_box.addLayout(self.signal_info_box)
 		self.right_box.addWidget(self.conf_graph)
 		self.right_box.addLayout(self.data_box)
 
@@ -362,6 +385,15 @@ class MainWindow(BaseWindow):
 
 		self.data_receive_btn.clicked.connect(self.data_receive)
 		self.dataset_btn.clicked.connect(self.open_dataset_window)
+
+	def update_signal_info(self, power_db):
+		self.power_label.setText(f"Мощность сигнала в дб: {power_db:.2f}")
+		if power_db > -10:
+			self.signal_label.setText("◉ Сигнал")
+			self.signal_label.setStyleSheet("color: #00ff00; font-weight: bold;")
+		else:
+			self.signal_label.setText("◉ Нет сигнала")
+			self.signal_label.setStyleSheet("color: #ff4444; font-weight: bold;")
 
 	def update_conf(self, conf: np.ndarray, pred_idx: int):
 		colors = []
@@ -390,17 +422,6 @@ class MainWindow(BaseWindow):
 		self.dataset_win.setWindowFlag(QtCore.Qt.WindowType.Window)
 		self.dataset_win.show()
 
-	def choice_model(self):
-		model_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-			self,
-			caption="Выберите модель в формате onnx",
-			directory=os.path.expanduser("~"),
-			filter="*.onnx",
-		)
-		if not model_path:
-			return
-		self.model_path = model_path
-
 	def clear_conf_plot(self):
 		self.conf_graph.clear()
 		self.bar_item = pqtg.BarGraphItem(
@@ -413,6 +434,15 @@ class MainWindow(BaseWindow):
 		)
 		self.conf_graph.addItem(self.bar_item)
 
+	def get_model_path(self):
+		model_path, _= QtWidgets.QFileDialog.getOpenFileName(
+			self.parent(),
+			caption="Выберите файл модели в формате onnx",
+			directory=os.path.expanduser("~"),
+			filter="*.onnx",
+		)
+		return model_path
+
 	def data_receive(self):
 		if not self.data_status:
 			self.ai_chk.setEnabled(True)
@@ -421,11 +451,12 @@ class MainWindow(BaseWindow):
 			self.data_status_label.style().unpolish(self.data_status_label)
 			self.data_status_label.style().polish(self.data_status_label)
 			self.data_status_label.update()
-			self.data_thread = DataThread()
+			self.data_thread = DataThread(self.get_model_path())
 			self.data_thread.start()
 			self.data_thread.data_signal.connect(self.draw_plot)
 			self.data_thread.info_signal.connect(self.update_info)
 			self.data_thread.probs_signal.connect(self.update_conf)
+			self.data_thread.power_signal.connect(self.update_signal_info)
 			self.ai_chk.stateChanged.connect(lambda _: self.data_thread.ai_signal.emit(self.ai_chk.isChecked()))
 			self.data_status = True
 		else:

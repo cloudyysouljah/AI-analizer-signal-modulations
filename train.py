@@ -133,6 +133,7 @@ class Train(QThread):
 		self.patience  = patience   # ✅ теперь атрибут, не локальная переменная
 		self.snr_min   = snr_min
 		self.max_samples = max_samples
+		self.training = False
 
 		self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -140,132 +141,134 @@ class Train(QThread):
 		self.model.to(device=self.device)
 
 	def run(self):
-		with h5py.File(self.path, "r") as f:
-			total = f["X"].shape[0]
-			n     = min(self.max_samples, total) if self.max_samples else total  # ✅
-			self.parent.log_signal.emit(f"📦 Загружаю {n:,} / {total:,} сэмплов")
-			x_data = f["X"][:n].astype(np.float16)
-			y_data = f["Y"][:n].astype(np.float32)
-			y_data = np.argmax(y_data, axis=1).astype(np.int64)
+		while self.training:
+			with h5py.File(self.path, "r") as f:
+				total = f["X"].shape[0]
+				n     = min(self.max_samples, total) if self.max_samples else total  # ✅
+				self.parent.log_signal.emit(f"📦 Загружаю {n:,} / {total:,} сэмплов")
+				x_data = f["X"][:n].astype(np.float16)
+				y_data = f["Y"][:n].astype(np.float32)
+				y_data = np.argmax(y_data, axis=1).astype(np.int64)
 
-		train_dataset, test_dataset, valid_dataset = self.make_tensor_datasets(x_data, y_data)
-		del x_data, y_data
-		gc.collect()
-		self.parent.log_signal.emit("🧹 Исходный numpy массив освобождён")
+			train_dataset, test_dataset, valid_dataset = self.make_tensor_datasets(x_data, y_data)
+			del x_data, y_data
+			gc.collect()
+			self.parent.log_signal.emit("🧹 Исходный numpy массив освобождён")
 
-		params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-		self.parent.log_signal.emit(f"🧠 Параметров: {params:,}  |  Классов: {len(CLASSES)}: {CLASSES}")
+			params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+			self.parent.log_signal.emit(f"🧠 Параметров: {params:,}  |  Классов: {len(CLASSES)}: {CLASSES}")
 
-		if os.name == "nt":
-			nw, pw, pf = 0, False, None
-			self.parent.log_signal.emit("💡 Windows: num_workers=0")
-		else:
-			nw, pw, pf = 4, True, 2
-			self.parent.log_signal.emit(f"💡 Linux: num_workers={nw}, persistent_workers=True")
-
-		pm = self.device.type == "cuda"
-		loader_kwargs = dict(
-			num_workers=nw,
-			pin_memory=pm,
-			persistent_workers=pw,
-			**({"prefetch_factor": pf} if pf else {}),
-		)
-
-		tr_loader   = DataLoader(train_dataset, batch_size=self.batch_size,     shuffle=True,  **loader_kwargs)
-		vl_loader   = DataLoader(valid_dataset, batch_size=self.batch_size * 2, shuffle=False, **loader_kwargs)
-		test_loader = DataLoader(test_dataset,  batch_size=self.batch_size * 2, shuffle=False, **loader_kwargs)
-
-		criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
-		optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
-		scheduler = optim.lr_scheduler.OneCycleLR(
-			optimizer,
-			max_lr=self.lr,
-			epochs=self.epochs,
-			steps_per_epoch=len(tr_loader),
-			pct_start=0.1,
-			anneal_strategy="cos",
-		)
-		scaler = GradScaler("cuda")
-
-		history      = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
-		best_val_acc = 0.0
-		no_improve   = 0  # ✅ вынесено из цикла
-
-		for epoch in range(1, self.epochs + 1):
-			tr_loss, tr_acc, train_time = self.train_epoch(
-				self.model, tr_loader, criterion, optimizer, scaler, scheduler, self.device)
-			vl_loss, vl_acc = self.eval_epoch(self.model, vl_loader, criterion, self.device)
-
-			history["train_loss"].append(tr_loss)
-			history["val_loss"].append(vl_loss)
-			history["train_acc"].append(tr_acc)
-			history["val_acc"].append(vl_acc)
-
-			vram_str = ""
-			if self.device.type == "cuda":
-				vram_str = f"  VRAM: {torch.cuda.memory_reserved(0) / 1024 ** 3:.1f} GB"
-
-			saved = ""
-			if vl_acc > best_val_acc:
-				best_val_acc = vl_acc
-				no_improve   = 0  # ✅ сбрасываем только при улучшении
-				torch.save(
-					{
-						"epoch":       epoch,
-						"model_state": self.model.state_dict(),
-						"classes":     CLASSES,
-						"val_acc":     vl_acc,
-						"snr_min":     self.snr_min,
-					},
-					self.save_path,
-				)
-				saved = "  💾 сохранено"
+			if os.name == "nt":
+				nw, pw, pf = 0, False, None
+				self.parent.log_signal.emit("💡 Windows: num_workers=0")
 			else:
-				no_improve += 1  # ✅ инкрементируется корректно
+				nw, pw, pf = 4, True, 2
+				self.parent.log_signal.emit(f"💡 Linux: num_workers={nw}, persistent_workers=True")
 
-			self.parent.progress_update.emit(epoch)
-			self.parent.log_signal.emit(
-				f"Epoch {epoch:3d}/{self.epochs} | "
-				f"Loss {tr_loss:.4f}/{vl_loss:.4f} | "
-				f"Acc {tr_acc:.4f}/{vl_acc:.4f} | "
-				f"Train time {train_time:.2f} sec"
-				f"{vram_str}{saved}"
+			pm = self.device.type == "cuda"
+			loader_kwargs = dict(
+				num_workers=nw,
+				pin_memory=pm,
+				persistent_workers=pw,
+				**({"prefetch_factor": pf} if pf else {}),
 			)
 
-			if no_improve >= self.patience:  # ✅ используем self.patience
-				self.parent.log_signal.emit(f"🛑 Слишком мало улучшений за последние {self.patience} эпох")
-				break
+			tr_loader   = DataLoader(train_dataset, batch_size=self.batch_size,     shuffle=True,  **loader_kwargs)
+			vl_loader   = DataLoader(valid_dataset, batch_size=self.batch_size * 2, shuffle=False, **loader_kwargs)
+			test_loader = DataLoader(test_dataset,  batch_size=self.batch_size * 2, shuffle=False, **loader_kwargs)
 
-		self.parent.log_signal.emit("\n🔄 Загружаю лучшую модель для финальной оценки...")
-		ckpt = torch.load(self.save_path, map_location=self.device)
-		self.model.load_state_dict(ckpt["model_state"])
+			criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+			optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+			scheduler = optim.lr_scheduler.OneCycleLR(
+				optimizer,
+				max_lr=self.lr,
+				epochs=self.epochs,
+				steps_per_epoch=len(tr_loader),
+				pct_start=0.1,
+				anneal_strategy="cos",
+			)
+			scaler = GradScaler("cuda")
 
-		test_loss, test_acc = self.eval_epoch(self.model, test_loader, criterion, self.device)
-		self.parent.log_signal.emit(f"🏁 Test Accuracy: {test_acc:.4f}  |  Test Loss: {test_loss:.4f}")
-		self.parent.log_signal.emit(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
+			history      = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+			best_val_acc = 0.0
+			no_improve   = 0  # ✅ вынесено из цикла
 
-		self.model.eval()
-		self.model.to("cpu")
+			for epoch in range(1, self.epochs + 1):
+				tr_loss, tr_acc, train_time = self.train_epoch(
+					self.model, tr_loader, criterion, optimizer, scaler, scheduler, self.device)
+				vl_loss, vl_acc = self.eval_epoch(self.model, vl_loader, criterion, self.device)
 
-		example_input = torch.randn(1, 2, 1024, dtype=torch.float32)
+				history["train_loss"].append(tr_loss)
+				history["val_loss"].append(vl_loss)
+				history["train_acc"].append(tr_acc)
+				history["val_acc"].append(vl_acc)
 
-		onnx_path = self.save_path.replace(".pt", ".onnx")
+				vram_str = ""
+				if self.device.type == "cuda":
+					vram_str = f"  VRAM: {torch.cuda.memory_reserved(0) / 1024 ** 3:.1f} GB"
 
-		torch.onnx.export(
-			self.model,
-			example_input,
-			onnx_path,
-			export_params=True,
-			opset_version=17,
-			input_names=["input"],
-			output_names=["output"],
-			dynamic_axes={
-				"input": {0: "batch"},
-				"output": {0: "batch"},
-			},
-		)
-		self.parent.log_signal.emit("✅ Успешно сохранил модель в ONNX")
-		self.parent.progress_update.emit(self.epochs)
+				saved = ""
+				if vl_acc > best_val_acc:
+					best_val_acc = vl_acc
+					no_improve   = 0  # ✅ сбрасываем только при улучшении
+					torch.save(
+						{
+							"epoch":       epoch,
+							"model_state": self.model.state_dict(),
+							"classes":     CLASSES,
+							"val_acc":     vl_acc,
+							"snr_min":     self.snr_min,
+						},
+						self.save_path,
+					)
+					saved = "  💾 сохранено"
+				else:
+					no_improve += 1  # ✅ инкрементируется корректно
+
+				self.parent.progress_update.emit(epoch)
+				self.parent.log_signal.emit(
+					f"Epoch {epoch:3d}/{self.epochs} | "
+					f"Loss {tr_loss:.4f}/{vl_loss:.4f} | "
+					f"Acc {tr_acc:.4f}/{vl_acc:.4f} | "
+					f"Train time {train_time:.2f} sec"
+					f"{vram_str}{saved}"
+				)
+
+				if no_improve >= self.patience:  # ✅ используем self.patience
+					self.parent.log_signal.emit(f"🛑 Слишком мало улучшений за последние {self.patience} эпох")
+					break
+
+			self.parent.log_signal.emit("\n🔄 Загружаю лучшую модель для финальной оценки...")
+			ckpt = torch.load(self.save_path, map_location=self.device)
+			self.model.load_state_dict(ckpt["model_state"])
+
+			test_loss, test_acc = self.eval_epoch(self.model, test_loader, criterion, self.device)
+			self.parent.log_signal.emit(f"🏁 Test Accuracy: {test_acc:.4f}  |  Test Loss: {test_loss:.4f}")
+			self.parent.log_signal.emit(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
+
+			self.model.eval()
+			self.model.to("cpu")
+
+			example_input = torch.randn(1, 2, 1024, dtype=torch.float32)
+
+			onnx_path = self.save_path.replace(".pt", ".onnx")
+
+			with torch.no_grad():
+				torch.onnx.export(
+					self.model,
+					example_input,
+					onnx_path,
+					export_params=True,
+					opset_version=17,
+					input_names=["input"],
+					output_names=["output"],
+					dynamic_axes={
+						"input": {0: "batch"},
+						"output": {0: "batch"},
+					},
+				)
+			self.parent.log_signal.emit("✅ Успешно сохранил модель в ONNX")
+			self.parent.progress_update.emit(self.epochs)
 
 	def train_epoch(
 		self,
@@ -350,3 +353,6 @@ class Train(QThread):
 		ds_te = to_dataset(idx_te, idx_te)
 		self.parent.log_signal.emit(f" Train: {len(ds_tr):,}  Val: {len(ds_vl):,}  Test: {len(ds_te):,}")
 		return ds_tr, ds_vl, ds_te
+	
+	def state_train(self, state):
+		self.training = state

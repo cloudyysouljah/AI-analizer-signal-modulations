@@ -7,6 +7,7 @@ class TrainWindow(QtWidgets.QDialog):
 	log_signal = QtCore.pyqtSignal(str)
 	progress_signal = QtCore.pyqtSignal(int)
 	progress_update = QtCore.pyqtSignal(int)
+	training_signal = QtCore.pyqtSignal(bool)
 	def __init__(self, parent=None, title=None, samples = None, path = None):
 		super().__init__(parent)
 
@@ -125,6 +126,7 @@ class TrainWindow(QtWidgets.QDialog):
 			self.train_thread.start()
 			self.train_btn.setText("Прервать обучение")
 		else:
+			self.training_signal.emit(False)
 			self.train_btn.setText("Начать обучение")
 
 	def train(self):
@@ -140,6 +142,8 @@ class TrainWindow(QtWidgets.QDialog):
 									save_path = "best_model_test.pt", batch_size = batch,
 									lr = lr_rate, epochs = epochs,
 									patience = patience, snr_min = snr_min, max_samples = max_samples)
+			self.training_signal.connect(model_train.state_train)
+			self.training_signal.emit(True)
 			model_train.run()
 		except Exception as e:
 			self.log_signal.emit(str(e))
