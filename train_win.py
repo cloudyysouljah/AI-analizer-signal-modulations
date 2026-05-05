@@ -1,13 +1,42 @@
 from PyQt6 import QtCore, QtWidgets, QtGui
 from PyQt6.QtGui import QFontMetrics
 import train
+import pyqtgraph as pqtg
 import threading
+
+class ResultsWindow(QtWidgets.QWidget):
+	def __init__(self, parent=None, title=None):
+		super().__init__(parent)
+		self.setWindowTitle(title or "Program")
+		self.layout = QtWidgets.QHBoxLayout()
+
+		self.loss_graph = pqtg.PlotWidget(title="Loss")
+		self.loss_graph.setLabel(axis='bottom', text="Эпохи")
+		self.loss_train = self.loss_graph.plot(pen=pqtg.mkPen("c", width=1), name="train")
+		self.loss_val = self.loss_graph.plot(pen=pqtg.mkPen("y", width=1), name="val")
+
+		self.accuracy_graph = pqtg.PlotWidget(title="Accuracy")
+		self.accuracy_graph.setLabel(axis='bottom', text="Эпохи")
+		self.accuracy_train = self.accuracy_graph.plot(pen=pqtg.mkPen("c", width=1), name="train")
+		self.accuracy_val = self.accuracy_graph.plot(pen=pqtg.mkPen("y", width=1), name="val")
+
+		self.layout.addWidget(self.loss_graph)
+		self.layout.addWidget(self.accuracy_graph)
+		self.setLayout(self.layout)
+
+	def plot_graphs(self, history):
+		self.loss_train.setData(history["train_loss"])
+		self.loss_val.setData(history["val_loss"])
+
+		self.accuracy_train.setData(history["train_acc"])
+		self.accuracy_val.setData(history["val_acc"])
 
 class TrainWindow(QtWidgets.QDialog):
 	log_signal = QtCore.pyqtSignal(str)
 	progress_signal = QtCore.pyqtSignal(int)
 	progress_update = QtCore.pyqtSignal(int)
 	training_signal = QtCore.pyqtSignal(bool)
+	plot_signal = QtCore.pyqtSignal(dict)
 	def __init__(self, parent=None, title=None, samples = None, path = None):
 		super().__init__(parent)
 
@@ -15,6 +44,8 @@ class TrainWindow(QtWidgets.QDialog):
 
 		self.path = path
 		self.samples = samples
+
+		self.results_win = ResultsWindow(parent = self, title = "Результаты обучения")
 
 		self.layout = QtWidgets.QVBoxLayout()
 
@@ -90,6 +121,7 @@ class TrainWindow(QtWidgets.QDialog):
 		self.log_signal.connect(self.log)
 		self.progress_signal.connect(self.state_train.setMaximum)
 		self.progress_update.connect(self.state_train.setValue)
+		self.plot_signal.connect(self.plot_graphs)
 
 	def resize_to_placeholders(self):
 		fm = QFontMetrics(self.font())
@@ -108,7 +140,7 @@ class TrainWindow(QtWidgets.QDialog):
 			w = fm.horizontalAdvance(text)
 			max_width = max(max_width, w)
 
-		total_width = max_width + 300
+		total_width = max_width + 500
 
 		self.setMinimumWidth(total_width)
 		self.resize(total_width, self.height())

@@ -246,6 +246,8 @@ class Train(QThread):
 			self.parent.log_signal.emit(f"🏁 Test Accuracy: {test_acc:.4f}  |  Test Loss: {test_loss:.4f}")
 			self.parent.log_signal.emit(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
 
+			self.parent.plot_signal.emit(history)
+
 			self.model.eval()
 			self.model.to("cpu")
 

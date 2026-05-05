@@ -222,6 +222,7 @@ class DataThread(QtCore.QThread):
 	ai_signal = QtCore.pyqtSignal(bool)
 	probs_signal = QtCore.pyqtSignal(np.ndarray, int)
 	power_signal = QtCore.pyqtSignal(float)
+	threshold_signal = QtCore.pyqtSignal(float)
 
 	def __init__(self, model_path):
 		super().__init__()
@@ -231,6 +232,7 @@ class DataThread(QtCore.QThread):
 		self.running = True
 		self.ai = False
 		self.model_path = model_path
+		self.threshold = 0.5
 
 		try:
 			self.sess = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
@@ -245,7 +247,7 @@ class DataThread(QtCore.QThread):
 		while self.running:
 			iq = self.generate_bpsk()
 			self.data = iq.T.tolist()
-			detected, power_db = self.energy_detector(iq, 10)
+			detected, power_db = self.energy_detector(iq, self.threshold)
 			if self.ai:
 				if detected:
 					pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
@@ -277,13 +279,13 @@ class DataThread(QtCore.QThread):
 
 		# Случайный SNR
 		if snr_db is None:
-			snr_db = np.random.choice(np.arange(-20, 30, 2))  # как в RadioML
+			snr_db = np.random.choice(np.arange(0, 30, 2))  # как в RadioML
 		snr_linear = 10 ** (snr_db / 10)
 		noise_std = 1 / np.sqrt(2 * snr_linear)
 		noise = (np.random.randn(n_samples) + 1j * np.random.randn(n_samples)) * noise_std
 		signal = signal + noise
 		# Нормализация по мощности
-		signal = signal / (np.sqrt(np.mean(np.abs(signal) ** 2)) + 1e-8)
+		# signal = signal / (np.sqrt(np.mean(np.abs(signal) ** 2)) + 1e-8)
 
 		return np.stack([signal.real, signal.imag], axis=0)
 
@@ -303,6 +305,9 @@ class DataThread(QtCore.QThread):
 
 	def ai_state(self, state):
 		self.ai = state
+
+	def threshold_state(self, state):
+		self.threshold = state
  
 	def csv_headers_write(self, headers):
 		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -361,8 +366,10 @@ class MainWindow(BaseWindow):
 		self.signal_info_box = QtWidgets.QVBoxLayout()
 		self.power_label = QtWidgets.QLabel("Мощность сигнала в дб: -")
 		self.signal_label = QtWidgets.QLabel("◉ Нет сигнала")
+		self.threshold_spin = QtWidgets.QDoubleSpinBox(minimum=-40, maximum=50, value=0.5, decimals=2, singleStep=0.02)
 		self.signal_info_box.addWidget(self.signal_label)
 		self.signal_info_box.addWidget(self.power_label)
+		self.signal_info_box.addWidget(self.threshold_spin)
 
 		self.data_box = QtWidgets.QHBoxLayout()
 		self.data_receive_btn = QtWidgets.QPushButton("Начать приём сигнала")
@@ -387,8 +394,8 @@ class MainWindow(BaseWindow):
 		self.dataset_btn.clicked.connect(self.open_dataset_window)
 
 	def update_signal_info(self, power_db):
-		self.power_label.setText(f"Мощность сигнала в дб: {power_db:.2f}")
-		if power_db > -10:
+		self.power_label.setText(f"Мощность сигнала в дб: {power_db:.4f}")
+		if power_db > self.threshold_spin.value():
 			self.signal_label.setText("◉ Сигнал")
 			self.signal_label.setStyleSheet("color: #00ff00; font-weight: bold;")
 		else:
@@ -458,6 +465,7 @@ class MainWindow(BaseWindow):
 			self.data_thread.probs_signal.connect(self.update_conf)
 			self.data_thread.power_signal.connect(self.update_signal_info)
 			self.ai_chk.stateChanged.connect(lambda _: self.data_thread.ai_signal.emit(self.ai_chk.isChecked()))
+			self.threshold_spin.valueChanged.connect(lambda _: self.data_thread.threshold_signal.emit(self.threshold_spin.value()))
 			self.data_status = True
 		else:
 			if self.ai_chk.isChecked():
