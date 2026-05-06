@@ -14,6 +14,8 @@ import time
 import pyqtgraph as pqtg
 from PyQt6 import QtCore, QtWidgets
 
+import data_receive
+
 classes = ["OOK", "ASK4", "ASK8",
 		   "BPSK", "QPSK", "PSK8",
 		   "PSK16", "PSK32", "APSK16",
@@ -84,7 +86,7 @@ class BaseWindow(QtWidgets.QWidget):
 		)
 		self.iq_plot.addItem(self.scatter)
 
-	def update_info(self, class_ = None, conf = None, speed = None, dataset_win = False):
+	def update_info(self, class_ = None, conf = None, speed = None, snr = None, dataset_win = False):
 		if dataset_win:
 			self.info_label.setText(f"Индекс сигнала: {self.index_spin.value()}\n" 
 									f"Класс: {classes[self.class_index]}\n"
@@ -99,7 +101,7 @@ class BaseWindow(QtWidgets.QWidget):
 				self.info_label.setText(f"Индекс сигнала: прием в реальном времени\n"
 										f"Класс: {class_} Вероятность: {(conf):.0%} ❌\n"
 										f"Время обработки нейросети: {speed:.2f} мс\n"
-										f"SNR (Отношение сигнал/шум в дБ): -")
+										f"SNR (Отношение сигнал/шум в дБ): {snr:.2f}")
 
 	def draw_plot(self, data):
 		data = np.array(data)
@@ -218,7 +220,7 @@ class DatasetWindow(BaseWindow):
 
 class DataThread(QtCore.QThread):
 	data_signal = QtCore.pyqtSignal(list)
-	info_signal = QtCore.pyqtSignal(str, float, float, bool)
+	info_signal = QtCore.pyqtSignal(str, float, float, float, bool)
 	ai_signal = QtCore.pyqtSignal(bool)
 	probs_signal = QtCore.pyqtSignal(np.ndarray, int)
 	power_signal = QtCore.pyqtSignal(float)
@@ -233,6 +235,11 @@ class DataThread(QtCore.QThread):
 		self.ai = False
 		self.model_path = model_path
 		self.threshold = 0.5
+		self._latest_iq = None
+
+		self.rp = data_receive.RedPitayaReader()
+		self.rp.data_ready.connect(self._on_iq_received)
+		self.rp.start()
 
 		try:
 			self.sess = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
@@ -241,22 +248,34 @@ class DataThread(QtCore.QThread):
 			print("AI error" , e)
 		self.ai_signal.connect(self.ai_state)
 
+	def _on_iq_received(self, iq: np.ndarray):
+		self._latest_iq = iq
+
 	def run(self):
 		csv_file = self.csv_headers_write(["Индекс сигнала", "Класс", "Вероятность", "Время обработки"])
 		self.index = 0
 		while self.running:
-			iq = self.generate_bpsk()
+			# iq = self.rp.get_data()
+			# iq = self.generate_bpsk()
+			# print(self._latest_iq)
+			if self._latest_iq is not None:
+				iq = self._latest_iq
+			else:
+				self.msleep(10)  # ждём первых данных
+				continue
 			self.data = iq.T.tolist()
-			detected, power_db = self.energy_detector(iq, self.threshold)
+
+			detected, power_db = self.energy_detector(iq, -40)
+			snr = self.estimate_snr_m2m4(iq)
 			if self.ai:
 				if detected:
 					pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
-					self.info_signal.emit(classes[pred_idx], confidence, speed_ai, False)
+					self.info_signal.emit(classes[pred_idx], confidence, speed_ai, snr, False)
 					self.probs_signal.emit(probs, pred_idx)
 					self.csv_data_write(csv_file, self.index, classes[pred_idx], confidence, speed_ai)
 					self.index += 1
 				else: 
-					self.info_signal.emit("", 0.0, 0.0, False)
+					self.info_signal.emit("", 0.0, 0.0, snr, False)
 					self.csv_data_write(csv_file, self.index, "", 0.0, 0.0)
 					self.index += 1
 			self.phase += 0.2
@@ -326,11 +345,30 @@ class DataThread(QtCore.QThread):
 			writer.writerow([index, class_index, confidence, speed_ai])
 
 	def energy_detector(self, iq, threshold):
-		power = np.mean(iq[0] ** 2 + iq[1] ** 2)
-		power_db = 10 * np.log10(power + 1e-12)
+		signal = iq[0] + 1j * iq[1]
+
+		power_w = np.mean(np.abs(signal) ** 2) / 50.0
+		# power = np.mean(iq[0] ** 2 + iq[1] ** 2)
+		power_db = 10 * np.log10(power_w + 1e-12)
 
 		detected = power_db >= threshold
 		return detected, power_db
+	
+	def estimate_snr_m2m4(self, iq):
+		"""SNR через метод моментов M2M4. Работает для любой модуляции."""
+		signal = iq[0] + 1j * iq[1]
+		
+		m2 = np.mean(np.abs(signal) ** 2)   # второй момент
+		m4 = np.mean(np.abs(signal) ** 4)   # четвёртый момент
+		
+		# Отношение моментов
+		ratio = m4 / (m2 ** 2 + 1e-12)
+		
+		# SNR из отношения моментов
+		snr_linear = 1 / (ratio - 1 + 1e-12)
+		snr_db = 10 * np.log10(max(snr_linear, 1e-12))
+		
+		return snr_db
 
 class MainWindow(BaseWindow):
 	def __init__(self, title=None):
