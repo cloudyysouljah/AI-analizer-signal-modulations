@@ -108,8 +108,8 @@ class BaseWindow(QtWidgets.QWidget):
 		i_data = data[:, 0]
 		q_data = data[:, 1]
 
-		self.curve_i.setData(i_data[:1024].tolist())
-		self.curve_q.setData(q_data[:1024].tolist())
+		self.curve_i.setData(i_data[:16384].tolist())
+		self.curve_q.setData(q_data[:16384].tolist())
 
 		spectrum = np.abs(np.fft.fftshift(np.fft.fft(i_data + 1j * q_data)))
 		self.curve_fft.setData(spectrum.tolist())
@@ -263,10 +263,16 @@ class DataThread(QtCore.QThread):
 			else:
 				self.msleep(10)  # ждём первых данных
 				continue
-			self.data = iq.T.tolist()
 
 			detected, power_db = self.energy_detector(iq, -40)
-			snr = self.estimate_snr_m2m4(iq)
+			# snr = self.estimate_snr_m2m4(iq)
+			snr = 0.0
+
+			self.data = iq.T.tolist()
+			# i_norm = iq[0] / np.sqrt(np.mean(iq[0]**2 + iq[1]**2))
+			# q_norm = iq[1] / np.sqrt(np.mean(iq[0]**2 + iq[1]**2))
+			# iq = np.stack([i_norm, q_norm], axis=0)
+			
 			if self.ai:
 				if detected:
 					pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
@@ -329,8 +335,10 @@ class DataThread(QtCore.QThread):
 		self.threshold = state
  
 	def csv_headers_write(self, headers):
+		if not os.path.exists("results"):
+			os.mkdir("results")
 		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-		csv_string = "result_" + str(timestamp) +".csv"
+		csv_string = "results/result_" + str(timestamp) +".csv"
 		with open(csv_string, "w", newline="") as f:
 			writer = csv.writer(f, delimiter=";")
 			writer.writerow([headers])
@@ -354,21 +362,21 @@ class DataThread(QtCore.QThread):
 		detected = power_db >= threshold
 		return detected, power_db
 	
-	def estimate_snr_m2m4(self, iq):
-		"""SNR через метод моментов M2M4. Работает для любой модуляции."""
-		signal = iq[0] + 1j * iq[1]
+	# def estimate_snr_m2m4(self, iq):
+	# 	"""SNR через метод моментов M2M4. Работает для любой модуляции."""
+	# 	signal = iq[0] + 1j * iq[1]
 		
-		m2 = np.mean(np.abs(signal) ** 2)   # второй момент
-		m4 = np.mean(np.abs(signal) ** 4)   # четвёртый момент
+	# 	m2 = np.mean(np.abs(signal) ** 2)   # второй момент
+	# 	m4 = np.mean(np.abs(signal) ** 4)   # четвёртый момент
 		
-		# Отношение моментов
-		ratio = m4 / (m2 ** 2 + 1e-12)
+	# 	# Отношение моментов
+	# 	ratio = m4 / (m2 ** 2 + 1e-12)
 		
-		# SNR из отношения моментов
-		snr_linear = 1 / (ratio - 1 + 1e-12)
-		snr_db = 10 * np.log10(max(snr_linear, 1e-12))
+	# 	# SNR из отношения моментов
+	# 	snr_linear = 1 / (ratio - 1 + 1e-12)
+	# 	snr_db = 10 * np.log10(max(snr_linear, 1e-12))
 		
-		return snr_db
+	# 	return snr_db
 
 class MainWindow(BaseWindow):
 	def __init__(self, title=None):
