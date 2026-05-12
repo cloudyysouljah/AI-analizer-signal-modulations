@@ -45,7 +45,7 @@ class TrainWindow(QtWidgets.QDialog):
 		self.path = path
 		self.samples = samples
 
-		self.results_win = ResultsWindow(parent = self, title = "Результаты обучения")
+		self.results_win = ResultsWindow(parent = None, title = "Результаты обучения")
 
 		self.layout = QtWidgets.QVBoxLayout()
 
@@ -85,6 +85,9 @@ class TrainWindow(QtWidgets.QDialog):
 		self.terminal.setReadOnly(True)
 		self.terminal.setObjectName("log")
 
+		self.result_button = QtWidgets.QPushButton()
+		self.result_button.setFixedSize(20, 20)
+
 		self.train_btn = QtWidgets.QPushButton("Начать обучение")
 
 		self.train_state = False
@@ -101,6 +104,7 @@ class TrainWindow(QtWidgets.QDialog):
 		self.model_grid.addWidget(self.batch_line, 2, 1)
 		self.model_grid.addWidget(self.learn_label, 3, 0)
 		self.model_grid.addWidget(self.learn_line, 3, 1)
+		self.model_grid.addWidget(self.result_button, 3, 2)
 		self.model_grid.addWidget(self.snr_label, 4, 0)
 		self.model_grid.addWidget(self.snr_line, 4, 1)
 		self.model_grid.addWidget(self.patience_label, 5, 0)
@@ -121,7 +125,14 @@ class TrainWindow(QtWidgets.QDialog):
 		self.log_signal.connect(self.log)
 		self.progress_signal.connect(self.state_train.setMaximum)
 		self.progress_update.connect(self.state_train.setValue)
-		self.plot_signal.connect(self.plot_graphs)
+		self.plot_signal.connect(self.results_win.plot_graphs)
+		self.result_button.clicked.connect(self.show_results_train)
+
+	def show_results_train(self):
+		if self.results_win.isVisible():
+			self.results_win.hide()
+		else: 
+			self.results_win.show()
 
 	def resize_to_placeholders(self):
 		fm = QFontMetrics(self.font())

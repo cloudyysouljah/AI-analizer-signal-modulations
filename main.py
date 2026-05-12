@@ -108,13 +108,19 @@ class BaseWindow(QtWidgets.QWidget):
 		i_data = data[:, 0]
 		q_data = data[:, 1]
 
-		self.curve_i.setData(i_data[:16384].tolist())
-		self.curve_q.setData(q_data[:16384].tolist())
+		self.curve_i.setData(i_data.tolist())
+		self.curve_q.setData(q_data.tolist())
 
 		spectrum = np.abs(np.fft.fftshift(np.fft.fft(i_data + 1j * q_data)))
 		self.curve_fft.setData(spectrum.tolist())
 
 		self.scatter.setData(x=i_data.tolist(), y=q_data.tolist())
+
+	def keyPressEvent(self, a0):
+		if a0.key() == QtCore.Qt.Key.Key_F11 and not self.isFullScreen():
+			self.showFullScreen()
+		elif a0.key() == QtCore.Qt.Key.Key_F11 and self.isFullScreen():
+			self.showNormal()
 
 class DatasetWindow(BaseWindow):
 	dataset_signal = QtCore.pyqtSignal(list)
@@ -236,6 +242,7 @@ class DataThread(QtCore.QThread):
 		self.model_path = model_path
 		self.threshold = 0.5
 		self._latest_iq = None
+		self.power = 0.0
 
 		self.rp = data_receive.RedPitayaReader()
 		self.rp.data_ready.connect(self._on_iq_received)
@@ -248,11 +255,12 @@ class DataThread(QtCore.QThread):
 			print("AI error" , e)
 		self.ai_signal.connect(self.ai_state)
 
-	def _on_iq_received(self, iq: np.ndarray):
+	def _on_iq_received(self, iq: np.ndarray, power_db):
 		self._latest_iq = iq
+		self.power = power_db
 
 	def run(self):
-		csv_file = self.csv_headers_write(["Индекс сигнала", "Класс", "Вероятность", "Время обработки"])
+		csv_file = self.csv_headers_write(["Индекс сигнала", "Статус сигнала", "Класс", "Вероятность в %", "Скорость обработки в мс"])
 		self.index = 0
 		while self.running:
 			# iq = self.rp.get_data()
@@ -264,7 +272,8 @@ class DataThread(QtCore.QThread):
 				self.msleep(10)  # ждём первых данных
 				continue
 
-			detected, power_db = self.energy_detector(iq, -40)
+			
+			# detected, power_db = self.energy_detector(iq, -40)
 			# snr = self.estimate_snr_m2m4(iq)
 			snr = 0.0
 
@@ -274,45 +283,45 @@ class DataThread(QtCore.QThread):
 			# iq = np.stack([i_norm, q_norm], axis=0)
 			
 			if self.ai:
-				if detected:
+				# if detected:
 					pred_idx, confidence, speed_ai, probs = self.ai_proc(iq)
 					self.info_signal.emit(classes[pred_idx], confidence, speed_ai, snr, False)
 					self.probs_signal.emit(probs, pred_idx)
-					self.csv_data_write(csv_file, self.index, classes[pred_idx], confidence, speed_ai)
+					self.csv_data_write(csv_file, self.index, True, classes[pred_idx], confidence, speed_ai)
 					self.index += 1
-				else: 
-					self.info_signal.emit("", 0.0, 0.0, snr, False)
-					self.csv_data_write(csv_file, self.index, "", 0.0, 0.0)
-					self.index += 1
+				# else:
+					# self.info_signal.emit("", 0.0, 0.0, snr, False)
+					# self.csv_data_write(csv_file, self.index, False, "", 0.0, 0.0)
+					# self.index += 1
 			self.phase += 0.2
-			self.power_signal.emit(power_db)
+			self.power_signal.emit(self.power)
 			self.data_signal.emit(self.data)
 			self.msleep(int(self.freq))
 
-	def generate_bpsk(self, n_samples=1024, sps=8, snr_db=None):
-		n_symbols = n_samples // sps
-		bits = np.random.randint(0, 2, n_symbols)
-		symbols = (2 * bits - 1).astype(complex)
+	# def generate_bpsk(self, n_samples=1024, sps=8, snr_db=None):
+	# 	n_symbols = n_samples // sps
+	# 	bits = np.random.randint(0, 2, n_symbols)
+	# 	symbols = (2 * bits - 1).astype(complex)
 
-		# Прямоугольный фильтр (как в RadioML 2016)
-		signal = np.repeat(symbols, sps)
+	# 	# Прямоугольный фильтр (как в RadioML 2016)
+	# 	signal = np.repeat(symbols, sps)
 
-		# Минимальный частотный сдвиг как в датасете
-		t = np.arange(n_samples)
-		freq_offset = np.random.uniform(-0.01, 0.01)  # почти 0
-		signal = signal * np.exp(1j * 2 * np.pi * freq_offset * t)
+	# 	# Минимальный частотный сдвиг как в датасете
+	# 	t = np.arange(n_samples)
+	# 	freq_offset = np.random.uniform(-0.01, 0.01)  # почти 0
+	# 	signal = signal * np.exp(1j * 2 * np.pi * freq_offset * t)
 
-		# Случайный SNR
-		if snr_db is None:
-			snr_db = np.random.choice(np.arange(0, 30, 2))  # как в RadioML
-		snr_linear = 10 ** (snr_db / 10)
-		noise_std = 1 / np.sqrt(2 * snr_linear)
-		noise = (np.random.randn(n_samples) + 1j * np.random.randn(n_samples)) * noise_std
-		signal = signal + noise
-		# Нормализация по мощности
-		# signal = signal / (np.sqrt(np.mean(np.abs(signal) ** 2)) + 1e-8)
+	# 	# Случайный SNR
+	# 	if snr_db is None:
+	# 		snr_db = np.random.choice(np.arange(-40, -10, 2))  # как в RadioML
+	# 	snr_linear = 10 ** (snr_db / 10)
+	# 	noise_std = 1 / np.sqrt(2 * snr_linear)
+	# 	noise = (np.random.randn(n_samples) + 1j * np.random.randn(n_samples)) * noise_std
+	# 	signal = signal + noise
+	# 	# Нормализация по мощности
+	# 	# signal = signal / (np.sqrt(np.mean(np.abs(signal) ** 2)) + 1e-8)
 
-		return np.stack([signal.real, signal.imag], axis=0)
+	# 	return np.stack([signal.real, signal.imag], axis=0)
 
 	def ai_proc(self, data):
 		if self.sess is None:
@@ -341,27 +350,31 @@ class DataThread(QtCore.QThread):
 		csv_string = "results/result_" + str(timestamp) +".csv"
 		with open(csv_string, "w", newline="") as f:
 			writer = csv.writer(f, delimiter=";")
-			writer.writerow([headers])
+			writer.writerow(headers)
 
 		return csv_string
 
-	def csv_data_write(self, name_file, index, class_index, confidence, speed_ai):
-		confidence = f"{confidence:.2f}"
-		speed_ai = f"{speed_ai:.2f}"
+	def csv_data_write(self, name_file, index, status_signal, class_index, confidence, speed_ai):
+		confidence = f"{confidence * 100:.2f}"
+		speed_ai = f'="{speed_ai:.2f}"'
 		with open(name_file, "a", newline="") as f:
 			writer = csv.writer(f, delimiter=";")
-			writer.writerow([index, class_index, confidence, speed_ai])
+			writer.writerow([index, status_signal, class_index, confidence, speed_ai])
 
-	def energy_detector(self, iq, threshold):
-		signal = iq[0] + 1j * iq[1]
+	# def energy_detector(self, iq, threshold):
+	# 	signal = iq[0] + 1j * iq[1]
 
-		power_w = np.mean(np.abs(signal) ** 2) / 50.0
-		# power = np.mean(iq[0] ** 2 + iq[1] ** 2)
-		power_db = 10 * np.log10(power_w + 1e-12)
+	# 	power_w = np.mean(np.abs(signal) ** 2) / 50.0
+	# 	power_db = 10 * np.log10(power_w + 1e-12)
 
-		detected = power_db >= threshold
-		return detected, power_db
+	# 	detected = power_db >= threshold
+	# 	return detected, power_db
 	
+	def stop(self):
+		if self.rp is not None:
+			self.rp.closeEvent(None)
+			self.rp = None
+		self.running = False
 	# def estimate_snr_m2m4(self, iq):
 	# 	"""SNR через метод моментов M2M4. Работает для любой модуляции."""
 	# 	signal = iq[0] + 1j * iq[1]
@@ -410,12 +423,16 @@ class MainWindow(BaseWindow):
 		self.conf_graph.addItem(self.bar_item)
 
 		self.signal_info_box = QtWidgets.QVBoxLayout()
+		self.threshold_box = QtWidgets.QHBoxLayout()
 		self.power_label = QtWidgets.QLabel("Мощность сигнала в дб: -")
 		self.signal_label = QtWidgets.QLabel("◉ Нет сигнала")
-		self.threshold_spin = QtWidgets.QDoubleSpinBox(minimum=-40, maximum=50, value=0.5, decimals=2, singleStep=0.02)
+		self.threshold_label = QtWidgets.QLabel("Уровень порога для определения сигнала в дб:")
+		self.threshold_spin = QtWidgets.QDoubleSpinBox(minimum=-40, maximum=50, value=-10, decimals=2, singleStep=0.1)
 		self.signal_info_box.addWidget(self.signal_label)
 		self.signal_info_box.addWidget(self.power_label)
-		self.signal_info_box.addWidget(self.threshold_spin)
+		self.threshold_box.addWidget(self.threshold_label)
+		self.threshold_box.addWidget(self.threshold_spin)
+		self.signal_info_box.addLayout(self.threshold_box)
 
 		self.data_box = QtWidgets.QHBoxLayout()
 		self.data_receive_btn = QtWidgets.QPushButton("Начать приём сигнала")
@@ -517,9 +534,9 @@ class MainWindow(BaseWindow):
 			if self.ai_chk.isChecked():
 				self.ai_chk.setChecked(False)
 			self.ai_chk.setEnabled(False)
-			self.clear_info()
-			self.clear_plot()
-			self.clear_conf_plot()
+
+			self.data_thread.rp.closeEvent(None)
+			self.data_thread.rp = None
 			self.data_receive_btn.setText("Начать приём сигнала")
 			self.data_status_label.setObjectName("data-receive-btn")
 			self.data_status_label.style().unpolish(self.data_status_label)
@@ -527,10 +544,13 @@ class MainWindow(BaseWindow):
 			self.data_status_label.update()
 			self.data_thread.running = False
 			self.data_status = False
+			self.clear_info()
+			self.clear_plot()
+			self.clear_conf_plot()
 
 	def closeEvent(self, event):
 		if self.data_thread is not None:
-			self.data_thread.running = False
+			self.data_thread.stop()
 
 if __name__ == "__main__":
 	app = QtWidgets.QApplication(sys.argv)
