@@ -1,4 +1,4 @@
-import redpitaya_scpi as scpi
+import handler.redpitaya_scpi as scpi
 import numpy as np
 import time
 from PyQt6 import QtCore
@@ -25,7 +25,6 @@ class RedPitayaReader(QtCore.QThread):
 			self.data_mutex.lock()
 			self.rp.acq_set(dec = 16)
 			self.rp.acq_start()
-			# Ждём триггер
 			while self.running:
 				self.rp.tx_txt('ACQ:TRIG NOW')
 				self.rp.tx_txt('ACQ:TRIG:STAT?')

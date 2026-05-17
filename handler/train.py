@@ -3,7 +3,6 @@ import gc
 import os
 import h5py
 import time
-import onnxruntime as ort
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,19 +10,14 @@ from torch.amp import GradScaler, autocast
 import torch.optim as optim
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
 from torch.utils.data import DataLoader, TensorDataset
 from PyQt6.QtCore import QThread, pyqtSignal
+from constants import CLASSES
 
 SAMPLE_LEN = 1024
-
-CLASSES = [
-	"OOK",       "4ASK",      "8ASK",      "BPSK",
-	"QPSK",      "8PSK",      "16PSK",     "32PSK",
-	"16APSK",    "32APSK",    "64APSK",    "128APSK",
-	"16QAM",     "32QAM",     "64QAM",     "128QAM",
-	"256QAM",    "AM-SSB-WC", "AM-SSB-SC", "AM-DSB-WC",
-	"AM-DSB-SC", "FM",        "GMSK",      "OQPSK",
-]
 
 class ResBlock1D(nn.Module):
 	def __init__(self, channels: int, kernel_size: int = 3):
@@ -40,7 +34,6 @@ class ResBlock1D(nn.Module):
 
 	def forward(self, x: torch.Tensor) -> torch.Tensor:
 		return self.act(x + self.block(x))
-
 
 class RadioMLNet(nn.Module):
 	def __init__(self, num_classes: int, dropout: float = 0.4):
@@ -130,7 +123,7 @@ class Train(QThread):
 		self.batch_size = batch_size
 		self.lr        = lr
 		self.epochs    = epochs
-		self.patience  = patience   # ✅ теперь атрибут, не локальная переменная
+		self.patience  = patience
 		self.snr_min   = snr_min
 		self.max_samples = max_samples
 		self.training = False
@@ -144,10 +137,14 @@ class Train(QThread):
 		while self.training:
 			with h5py.File(self.path, "r") as f:
 				total = f["X"].shape[0]
-				n     = min(self.max_samples, total) if self.max_samples else total  # ✅
+				snr = f["Z"][:].reshape(-1)
+				idx = np.where(snr >= self.snr_min)[0]
+				if self.max_samples:
+					idx = idx[:self.max_samples]
+				n = len(idx)
 				self.parent.log_signal.emit(f"📦 Загружаю {n:,} / {total:,} сэмплов")
-				x_data = f["X"][:n].astype(np.float16)
-				y_data = f["Y"][:n].astype(np.float32)
+				x_data = f["X"][idx].astype(np.float16)
+				y_data = f["Y"][idx].astype(np.float32)
 				y_data = np.argmax(y_data, axis=1).astype(np.int64)
 
 			train_dataset, test_dataset, valid_dataset = self.make_tensor_datasets(x_data, y_data)
@@ -247,6 +244,7 @@ class Train(QThread):
 			self.parent.log_signal.emit(f"🏆 Лучший Val Accuracy: {best_val_acc:.4f}")
 
 			self.parent.plot_signal.emit(history)
+			self.plot_confusion(self.model, test_loader, CLASSES, self.device)
 
 			self.model.eval()
 			self.model.to("cpu")
@@ -271,6 +269,7 @@ class Train(QThread):
 				)
 			self.parent.log_signal.emit("✅ Успешно сохранил модель в ONNX")
 			self.parent.progress_update.emit(self.epochs)
+			self.training = False
 
 	def train_epoch(
 		self,
@@ -354,7 +353,58 @@ class Train(QThread):
 		ds_vl = to_dataset(idx_vl, idx_vl)
 		ds_te = to_dataset(idx_te, idx_te)
 		self.parent.log_signal.emit(f" Train: {len(ds_tr):,}  Val: {len(ds_vl):,}  Test: {len(ds_te):,}")
-		return ds_tr, ds_vl, ds_te
+		return ds_tr, ds_te, ds_vl
 	
 	def state_train(self, state):
 		self.training = state
+
+	def plot_confusion(
+		self,
+		model: nn.Module,
+		loader: DataLoader,
+		classes: list[str],
+		device: torch.device,
+		save_path: str = "train_results/confusion_matrix.png",
+	) -> None:
+		model.eval()
+		all_pred, all_true = [], []
+
+		with torch.no_grad():
+			for X_batch, y_batch in loader:
+				with autocast("cuda" if torch.cuda.is_available() else "cpu"):
+					pred = model(X_batch.to(device, dtype=torch.float16, non_blocking=True)).argmax(1).cpu()
+				all_pred.extend(pred.numpy())
+				all_true.extend(y_batch.numpy())
+
+		present_labels = sorted(set(all_true) | set(all_pred))
+		present_names  = [classes[i] for i in present_labels]
+
+		cm      = confusion_matrix(all_true, all_pred, labels=present_labels)
+		cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+		n = len(present_labels)
+		plt.figure(figsize=(max(12, n), max(10, n - 2)))
+		sns.heatmap(
+			cm_norm,
+			annot=True,
+			fmt=".2f",
+			xticklabels=present_names,
+			yticklabels=present_names,
+			cmap="Blues",
+			linewidths=0.3,
+		)
+		plt.title("Confusion Matrix (нормализованная)")
+		plt.ylabel("Истинный класс")
+		plt.xlabel("Предсказанный класс")
+		plt.tight_layout()
+		if not os.path.exists(save_path):
+			os.makedirs(os.path.dirname(save_path), exist_ok=True)
+		plt.savefig(save_path, dpi=150)
+		print(f"📊 Confusion matrix сохранена: {save_path}")
+
+		print("\n📋 Classification Report:")
+		print(classification_report(
+			all_true, all_pred,
+			labels=present_labels,
+			target_names=present_names,
+		))

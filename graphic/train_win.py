@@ -1,6 +1,6 @@
 from PyQt6 import QtCore, QtWidgets, QtGui
 from PyQt6.QtGui import QFontMetrics
-import train
+import handler.train as train
 import pyqtgraph as pqtg
 import threading
 
@@ -8,8 +8,10 @@ class ResultsWindow(QtWidgets.QWidget):
 	def __init__(self, parent=None, title=None):
 		super().__init__(parent)
 		self.setWindowTitle(title or "Program")
-		self.layout = QtWidgets.QHBoxLayout()
 
+		self.layout = QtWidgets.QVBoxLayout()
+
+		self.graph_layout = QtWidgets.QHBoxLayout()
 		self.loss_graph = pqtg.PlotWidget(title="Loss")
 		self.loss_graph.setLabel(axis='bottom', text="Эпохи")
 		self.loss_train = self.loss_graph.plot(pen=pqtg.mkPen("c", width=1), name="train")
@@ -20,8 +22,9 @@ class ResultsWindow(QtWidgets.QWidget):
 		self.accuracy_train = self.accuracy_graph.plot(pen=pqtg.mkPen("c", width=1), name="train")
 		self.accuracy_val = self.accuracy_graph.plot(pen=pqtg.mkPen("y", width=1), name="val")
 
-		self.layout.addWidget(self.loss_graph)
-		self.layout.addWidget(self.accuracy_graph)
+		self.graph_layout.addWidget(self.loss_graph)
+		self.graph_layout.addWidget(self.accuracy_graph)
+		self.layout.addLayout(self.graph_layout)
 		self.setLayout(self.layout)
 
 	def plot_graphs(self, history):
